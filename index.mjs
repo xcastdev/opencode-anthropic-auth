@@ -1,16 +1,247 @@
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
+
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const VERSION = "2.1.76";
 const AGENT = `claude-code/${VERSION}`;
 const SALT = "59cf53e54c78";
 const ENTRY = "CLAUDE_CODE_ENTRYPOINT";
-const PROMPT = new URL("./anthropic-prompt.txt", import.meta.url);
+const DEFAULT_PROMPT =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+const DEFAULT_PROMPT_URL = new URL("./anthropic-prompt.txt", import.meta.url);
+const CLI_ACCOUNT_ID = "cli";
+const CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const CLI_REFRESH_MODEL = "claude-haiku-4-5-20250514";
 
-async function prompt() {
-  const file = Bun.file(PROMPT);
+function promptUrl(filename) {
+  return new URL(`./${filename}`, import.meta.url);
+}
+
+async function readPromptFile(url) {
+  const file = Bun.file(url);
   if (!(await file.exists())) {
-    return "You are Claude Code, Anthropic's official CLI for Claude.";
+    return null;
   }
   return file.text();
+}
+
+async function prompt(model) {
+  const modelID = model?.api?.id;
+  if (typeof modelID === "string" && modelID.trim()) {
+    const filename = `anthropic-${modelID.trim()}-prompt.txt`;
+    const exact = await readPromptFile(promptUrl(filename));
+    if (exact !== null) {
+      return { text: exact, source: filename };
+    }
+  }
+
+  const fallback = await readPromptFile(DEFAULT_PROMPT_URL);
+  if (fallback !== null) {
+    return { text: fallback, source: "anthropic-prompt.txt" };
+  }
+
+  return { text: DEFAULT_PROMPT, source: "builtin-default" };
+}
+
+function normalizeExpiry(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) return normalizeExpiry(numeric);
+
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+
+  return null;
+}
+
+function oauthSuccess({ access, refresh, expires, accountId }) {
+  return {
+    type: "success",
+    access,
+    refresh,
+    expires,
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
+function parseClaudeCliCredentials(value) {
+  if (!value || typeof value !== "object") return null;
+
+  const oauth =
+    value.claudeAiOauth && typeof value.claudeAiOauth === "object"
+      ? value.claudeAiOauth
+      : value;
+
+  const access = oauth.accessToken ?? oauth.access_token;
+  const refresh = oauth.refreshToken ?? oauth.refresh_token;
+  const expires = normalizeExpiry(
+    oauth.expiresAt ?? oauth.expires_at ?? oauth.expiry ?? oauth.expires,
+  );
+
+  if (typeof access !== "string" || !access.trim()) return null;
+  if (typeof refresh !== "string" || !refresh.trim()) return null;
+  if (!expires || expires <= 0) return null;
+
+  return oauthSuccess({
+    access: access.trim(),
+    refresh: refresh.trim(),
+    expires,
+    accountId: CLI_ACCOUNT_ID,
+  });
+}
+
+function claudeCredentialsPath() {
+  const base = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+  return join(base, ".credentials.json");
+}
+
+async function readStream(stream) {
+  if (!stream) return "";
+  return new Response(stream).text();
+}
+
+async function run(command, args) {
+  try {
+    const proc = Bun.spawn([command, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+      env: {
+        ...process.env,
+        TERM: process.env.TERM || "dumb",
+      },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      readStream(proc.stdout),
+      readStream(proc.stderr),
+      proc.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+  } catch (error) {
+    return {
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      exitCode: 1,
+    };
+  }
+}
+
+async function readClaudeCliCredentialsFromKeychain() {
+  if (platform() !== "darwin") return null;
+
+  const result = await run("security", [
+    "find-generic-password",
+    "-s",
+    CLI_KEYCHAIN_SERVICE,
+    "-w",
+  ]);
+  if (result.exitCode !== 0 || !result.stdout.trim()) return null;
+
+  try {
+    return parseClaudeCliCredentials(JSON.parse(result.stdout.trim()));
+  } catch {
+    return null;
+  }
+}
+
+async function readClaudeCliCredentialsFromFile() {
+  const file = Bun.file(claudeCredentialsPath());
+  if (!(await file.exists())) return null;
+
+  try {
+    return parseClaudeCliCredentials(await file.json());
+  } catch {
+    return null;
+  }
+}
+
+async function loadClaudeCliCredentials() {
+  return (
+    (await readClaudeCliCredentialsFromKeychain()) ??
+    (await readClaudeCliCredentialsFromFile())
+  );
+}
+
+async function refreshClaudeCliCredentials() {
+  const result = await run("claude", [
+    "-p",
+    ".",
+    "--model",
+    CLI_REFRESH_MODEL,
+  ]);
+
+  if (result.exitCode !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim() || String(result.exitCode);
+    throw new Error(`Claude CLI refresh failed: ${detail}`);
+  }
+
+  const credentials = await loadClaudeCliCredentials();
+  if (!credentials) {
+    throw new Error("Claude CLI credentials not found after refresh");
+  }
+
+  return credentials;
+}
+
+async function loadFreshClaudeCliCredentials() {
+  const credentials = await loadClaudeCliCredentials();
+  if (credentials && credentials.expires > Date.now()) return credentials;
+  return refreshClaudeCliCredentials();
+}
+
+function isCliOAuth(auth) {
+  return auth?.type === "oauth" && auth.accountId === CLI_ACCOUNT_ID;
+}
+
+async function saveOAuthAuth(client, auth) {
+  await client.auth.set({
+    path: { id: "anthropic" },
+    body: {
+      type: "oauth",
+      access: auth.access,
+      refresh: auth.refresh,
+      expires: auth.expires,
+      ...(auth.accountId ? { accountId: auth.accountId } : {}),
+    },
+  });
+}
+
+async function refreshStoredOAuth(client, auth) {
+  if (isCliOAuth(auth)) {
+    const refreshed = await refreshClaudeCliCredentials();
+    await saveOAuthAuth(client, refreshed);
+    return refreshed;
+  }
+
+  const res = await fetch("https://console.anthropic.com/v1/oauth/token", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      grant_type: "refresh_token",
+      refresh_token: auth.refresh,
+      client_id: CLIENT_ID,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Token refresh failed: ${res.status}`);
+
+  const json = await res.json();
+  const refreshed = oauthSuccess({
+    refresh: json.refresh_token,
+    access: json.access_token,
+    expires: Date.now() + json.expires_in * 1000,
+    accountId: auth.accountId,
+  });
+  await saveOAuthAuth(client, refreshed);
+  return refreshed;
 }
 
 function base64url(input) {
@@ -123,22 +354,34 @@ async function exchange(code, verifier) {
   if (!res.ok) return { type: "failed" };
 
   const json = await res.json();
-  return {
-    type: "success",
+  return oauthSuccess({
     refresh: json.refresh_token,
     access: json.access_token,
     expires: Date.now() + json.expires_in * 1000,
-  };
+  });
 }
 
 export async function AnthropicAuthPlugin({ client }) {
   return {
     async "experimental.chat.system.transform"(input, output) {
       if (input.model?.providerID !== "anthropic") return;
-      const prefix = await prompt();
-      output.system.unshift(prefix);
+      const resolved = await prompt(input.model);
+      await client.app
+        .log({
+          body: {
+            service: "opencode-anthropic-auth",
+            level: "debug",
+            message: "Using Anthropic system prompt",
+            extra: {
+              modelID: input.model?.api?.id ?? null,
+              prompt: resolved.source,
+            },
+          },
+        })
+        .catch(() => {});
+      output.system.unshift(resolved.text);
       if (output.system[1])
-        output.system[1] = `${prefix}\n\n${output.system[1]}`;
+        output.system[1] = `${resolved.text}\n\n${output.system[1]}`;
     },
     auth: {
       provider: "anthropic",
@@ -157,37 +400,11 @@ export async function AnthropicAuthPlugin({ client }) {
         return {
           apiKey: "",
           async fetch(input, init) {
-            const auth = await getAuth();
+            let auth = await getAuth();
             if (auth.type !== "oauth") return fetch(input, init);
 
             if (!auth.access || auth.expires < Date.now()) {
-              const res = await fetch(
-                "https://console.anthropic.com/v1/oauth/token",
-                {
-                  method: "POST",
-                  headers: authHeaders(),
-                  body: JSON.stringify({
-                    grant_type: "refresh_token",
-                    refresh_token: auth.refresh,
-                    client_id: CLIENT_ID,
-                  }),
-                },
-              );
-
-              if (!res.ok)
-                throw new Error(`Token refresh failed: ${res.status}`);
-
-              const json = await res.json();
-              await client.auth.set({
-                path: { id: "anthropic" },
-                body: {
-                  type: "oauth",
-                  refresh: json.refresh_token,
-                  access: json.access_token,
-                  expires: Date.now() + json.expires_in * 1000,
-                },
-              });
-              auth.access = json.access_token;
+              auth = await refreshStoredOAuth(client, auth);
             }
 
             const req = init ?? {};
@@ -340,6 +557,23 @@ export async function AnthropicAuthPlugin({ client }) {
               callback: async (code) => exchange(code, auth.verifier),
             };
           },
+        },
+        {
+          label: "Use Claude CLI OAuth",
+          type: "oauth",
+          authorize: async () => ({
+            url: "",
+            instructions:
+              "Reads your existing Claude CLI login and refreshes it with `claude` if needed.",
+            method: "auto",
+            callback: async () => {
+              try {
+                return await loadFreshClaudeCliCredentials();
+              } catch {
+                return { type: "failed" };
+              }
+            },
+          }),
         },
         {
           label: "Create an API Key",
