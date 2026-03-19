@@ -1,0 +1,125 @@
+# ------------------------- AI --------------------------------
+.codenomad/
+
+# ---------------------- OS / Editor --------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+
+# ---------------------- Logs ---------------------------------
+*.log
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------------------- Env / Secrets ------------------------
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.cert
+credentials.json
+secrets.json
+
+# ---------------------- Binaries / Build ---------------------
+/bin/
+/out/
+/build/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.bin
+*.o
+*.a
+*.obj
+*.pyc
+*.pyo
+
+# ---------------------- Node / JS / TS -----------------------
+node_modules/
+.npm/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+*.tsbuildinfo
+.turbo/
+
+# ---------------------- Next.js ------------------------------
+.next/
+.vercel/
+
+# ---------------------- SolidJS ------------------------------
+.solid/
+.vinxi/
+
+# ---------------------- TanStack Start -----------------------
+.tanstack/
+.output/
+.nitro/
+
+# ---------------------- Python -------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+.venv/
+venv/
+env/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# ---------------------- Go ----------------------------------
+*.test
+*.out
+vendor/
+# Go workspace (if not using vendoring)
+# /go.work.sum
+
+# ---------------------- Databases / Data ---------------------
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sql.gz
+
+# ---------------------- Misc --------------------------------
+.cache/
+tmp/
+temp/
+bin/
+coverage/
+docs/refs/
+*.bak
+*.tmp
+*.pid
+*.seed
