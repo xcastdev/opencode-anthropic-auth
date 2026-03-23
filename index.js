@@ -5,13 +5,14 @@ const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const VERSION = "2.1.76";
 const AGENT = `claude-code/${VERSION}`;
 const SALT = "59cf53e54c78";
-const ENTRY = "CLAUDE_CODE_ENTRYPOINT";
-const DEFAULT_PROMPT =
-  "You are Claude Code, Anthropic's official CLI for Claude.";
-const DEFAULT_PROMPT_URL = new URL("./anthropic-prompt.txt", import.meta.url);
+
 const CLI_ACCOUNT_ID = "cli";
 const CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLI_REFRESH_MODEL = "claude-haiku-4-5-20250514";
+
+const DEFAULT_PROMPT_FILENAME = "anthropic-prompt.txt";
+const DEFAULT_PROMPT =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
 
 function promptUrl(filename) {
   return new URL(`./${filename}`, import.meta.url);
@@ -35,9 +36,11 @@ async function prompt(model) {
     }
   }
 
-  const fallback = await readPromptFile(DEFAULT_PROMPT_URL);
+  const fallback = await readPromptFile(
+    promptUrl("./" + DEFAULT_PROMPT_FILENAME),
+  );
   if (fallback !== null) {
-    return { text: fallback, source: "anthropic-prompt.txt" };
+    return { text: fallback, source: DEFAULT_PROMPT_FILENAME };
   }
 
   return { text: DEFAULT_PROMPT, source: "builtin-default" };
@@ -99,7 +102,8 @@ function parseClaudeCliCredentials(value) {
 }
 
 function claudeCredentialsPath() {
-  const base = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+  const base =
+    process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
   return join(base, ".credentials.json");
 }
 
@@ -171,15 +175,11 @@ async function loadClaudeCliCredentials() {
 }
 
 async function refreshClaudeCliCredentials() {
-  const result = await run("claude", [
-    "-p",
-    ".",
-    "--model",
-    CLI_REFRESH_MODEL,
-  ]);
+  const result = await run("claude", ["-p", ".", "--model", CLI_REFRESH_MODEL]);
 
   if (result.exitCode !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim() || String(result.exitCode);
+    const detail =
+      result.stderr.trim() || result.stdout.trim() || String(result.exitCode);
     throw new Error(`Claude CLI refresh failed: ${detail}`);
   }
 
@@ -307,7 +307,7 @@ function billing(body) {
     `${SALT}${sample}${VERSION}`,
     "hex",
   ).slice(0, 3);
-  const entry = process.env[ENTRY]?.trim() || "cli";
+  const entry = process.env["CLAUDE_CODE_ENTRYPOINT"]?.trim() || "cli";
   return `cc_version=${VERSION}.${hash}; cc_entrypoint=${entry}; cch=00000;`;
 }
 
@@ -363,26 +363,33 @@ async function exchange(code, verifier) {
 
 export async function AnthropicAuthPlugin({ client }) {
   return {
+    /* ---------- Could only get defualt prompt working ----------- */
     async "experimental.chat.system.transform"(input, output) {
       if (input.model?.providerID !== "anthropic") return;
-      const resolved = await prompt(input.model);
-      await client.app
-        .log({
-          body: {
-            service: "opencode-anthropic-auth",
-            level: "debug",
-            message: "Using Anthropic system prompt",
-            extra: {
-              modelID: input.model?.api?.id ?? null,
-              prompt: resolved.source,
-            },
-          },
-        })
-        .catch(() => {});
-      output.system.unshift(resolved.text);
+      output.system.unshift(DEFAULT_PROMPT);
       if (output.system[1])
-        output.system[1] = `${resolved.text}\n\n${output.system[1]}`;
+        output.system[1] = `${DEFAULT_PROMPT}\n\n${output.system[1]}`;
     },
+    // async "experimental.chat.system.transform"(input, output) {
+    //   if (input.model?.providerID !== "anthropic") return;
+    //   const resolved = await prompt(input.model);
+    //   await client.app
+    //     .log({
+    //       body: {
+    //         service: "opencode-anthropic-auth",
+    //         level: "debug",
+    //         message: "Using Anthropic system prompt",
+    //         extra: {
+    //           modelID: input.model?.api?.id ?? null,
+    //           prompt: resolved.source,
+    //         },
+    //       },
+    //     })
+    //     .catch(() => {});
+    //   output.system.unshift(resolved.text);
+    //   if (output.system[1])
+    //     output.system[1] = `${resolved.text}\n\n${output.system[1]}`;
+    // },
     auth: {
       provider: "anthropic",
       async loader(getAuth, provider) {
@@ -612,5 +619,3 @@ export async function AnthropicAuthPlugin({ client }) {
     },
   };
 }
-
-export default AnthropicAuthPlugin;
