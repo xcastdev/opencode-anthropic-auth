@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode-anthropic-auth-cli",
+      "name": "opencode-anthropic-auth",
       "peerDependencies": {
         "@opencode-ai/plugin": "*",
       },
