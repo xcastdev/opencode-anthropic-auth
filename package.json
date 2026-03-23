@@ -1,5 +1,5 @@
 {
-  "name": "opencode-anthropic-auth",
+  "name": "opencode-anthropic-auth-cli",
   "version": "0.1.0",
   "type": "module",
   "main": "./index.mjs",
