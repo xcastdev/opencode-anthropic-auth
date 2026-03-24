@@ -8,7 +8,7 @@ const SALT = "59cf53e54c78";
 
 const CLI_ACCOUNT_ID = "cli";
 const CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const CLI_REFRESH_MODEL = "claude-haiku-4-5-20250514";
+const CLI_REFRESH_MODEL = "claude-haiku-4-5";
 
 const DEFAULT_PROMPT_FILENAME = "anthropic-prompt.txt";
 const DEFAULT_PROMPT =
